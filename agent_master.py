@@ -9,7 +9,7 @@ import anthropic
 import google.generativeai as genai
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from googleapiclient.discovery import build
 import pickle
 import base64
@@ -441,7 +441,7 @@ def get_google_calendar_service():
     if creds and creds.expired and creds.refresh_token:
         print(f"[Calendar] Token expired, refreshing...")
         try:
-            creds.refresh(Request())
+            creds.refresh(GoogleAuthRequest())
             with open(GOOGLE_TOKEN_FILE, 'wb') as token:
                 pickle.dump(creds, token)
             print(f"[Calendar] Token refreshed successfully")
