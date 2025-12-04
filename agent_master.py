@@ -12,8 +12,26 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 import pickle
+import base64
 
 # --- INITIALIZATION ---
+
+# Restore Google token from environment variable if file doesn't exist
+def restore_google_token():
+    token_b64 = os.environ.get("GOOGLE_TOKEN_BASE64")
+    data_dir = os.environ.get("DATA_DIR", "/app/data")
+    token_path = f"{data_dir}/google_token.pickle"
+
+    if token_b64 and not os.path.exists(token_path):
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+            with open(token_path, 'wb') as f:
+                f.write(base64.b64decode(token_b64))
+            print(f"[Startup] Restored Google token from environment variable")
+        except Exception as e:
+            print(f"[Startup] Failed to restore Google token: {e}")
+
+restore_google_token()
 # Get allowed hosts from environment (for Railway/ngrok flexibility)
 ALLOWED_HOST = os.environ.get("ALLOWED_HOST", "dan-brain.ngrok.app")
 
