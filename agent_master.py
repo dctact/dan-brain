@@ -439,16 +439,21 @@ def get_google_calendar_service():
 
     # Refresh or return None if no valid creds
     if creds and creds.expired and creds.refresh_token:
+        print(f"[Calendar] Token expired, refreshing...")
         try:
             creds.refresh(Request())
             with open(GOOGLE_TOKEN_FILE, 'wb') as token:
                 pickle.dump(creds, token)
-        except Exception:
+            print(f"[Calendar] Token refreshed successfully")
+        except Exception as e:
+            print(f"[Calendar] Token refresh failed: {e}")
             creds = None
 
     if not creds or not creds.valid:
+        print(f"[Calendar] No valid creds - creds exists: {creds is not None}, valid: {creds.valid if creds else 'N/A'}")
         return None
 
+    print(f"[Calendar] Building calendar service...")
     return build('calendar', 'v3', credentials=creds)
 
 @mcp.tool()
