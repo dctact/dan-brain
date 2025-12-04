@@ -36,6 +36,26 @@ def restore_google_token():
         print(f"[Startup] Token already exists at {token_path}")
 
 restore_google_token()
+
+# Restore knowledge graph from environment variable if file doesn't exist
+def restore_knowledge_graph():
+    kg_b64 = os.environ.get("KNOWLEDGE_GRAPH_BASE64")
+    data_dir = os.environ.get("DATA_DIR", "/app/data")
+    kg_path = f"{data_dir}/knowledge_graph.json"
+
+    if kg_b64 and not os.path.exists(kg_path):
+        try:
+            os.makedirs(data_dir, exist_ok=True)
+            with open(kg_path, 'w') as f:
+                f.write(base64.b64decode(kg_b64).decode('utf-8'))
+            print(f"[Startup] Restored knowledge graph to {kg_path}")
+        except Exception as e:
+            print(f"[Startup] Failed to restore knowledge graph: {e}")
+    elif os.path.exists(kg_path):
+        print(f"[Startup] Knowledge graph already exists at {kg_path}")
+
+restore_knowledge_graph()
+
 # Get allowed hosts from environment (for Railway/ngrok flexibility)
 ALLOWED_HOST = os.environ.get("ALLOWED_HOST", "dan-brain.ngrok.app")
 
