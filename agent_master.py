@@ -1190,6 +1190,19 @@ async def api_health(request: Request):
     return JSONResponse({"status": "ok", "service": "dan-brain"})
 
 
+async def api_get_last_conversation(request: Request):
+    """Debug endpoint to check last conversation context."""
+    if not os.path.exists(LAST_CONVERSATION_FILE):
+        return JSONResponse({"exists": False, "message": "No last conversation file"})
+
+    try:
+        with open(LAST_CONVERSATION_FILE, 'r') as f:
+            data = json.load(f)
+        return JSONResponse({"exists": True, "data": data})
+    except Exception as e:
+        return JSONResponse({"exists": True, "error": str(e)})
+
+
 # --- SERVER ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
@@ -1203,6 +1216,7 @@ if __name__ == "__main__":
     mcp_app.routes.insert(0, Route("/api/rest-of-day", api_get_rest_of_day, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/rest-of-day/structured", api_get_rest_of_day_structured, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/health", api_health, methods=["GET"]))
+    mcp_app.routes.insert(0, Route("/api/last-conversation", api_get_last_conversation, methods=["GET"]))
 
     # Run with uvicorn
     uvicorn.run(mcp_app, host="0.0.0.0", port=8000)
