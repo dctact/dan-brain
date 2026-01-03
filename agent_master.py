@@ -24,7 +24,7 @@ def restore_google_token():
 
     print(f"[Startup] Token restore - data_dir: {data_dir}, token_path: {token_path}")
 
-    if token_b64 and not os.path.exists(token_path):
+    if token_b64:
         try:
             os.makedirs(data_dir, exist_ok=True)
             with open(token_path, 'wb') as f:
@@ -32,8 +32,6 @@ def restore_google_token():
             print(f"[Startup] Restored Google token to {token_path}")
         except Exception as e:
             print(f"[Startup] Failed to restore Google token: {e}")
-    elif os.path.exists(token_path):
-        print(f"[Startup] Token already exists at {token_path}")
 
 restore_google_token()
 
