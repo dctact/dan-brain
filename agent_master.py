@@ -477,24 +477,43 @@ def get_google_calendar_service():
     return build('calendar', 'v3', credentials=creds)
 
 @mcp.tool()
-def get_calendar_events(hours_ahead: int = 18) -> str:
+def get_calendar_events(hours_ahead: int = 24, include_past_today: bool = False) -> str:
     """
-    Get Dan's upcoming calendar events. Use this to understand time constraints!
+    Get Dan's upcoming calendar events from Google Calendar. Essential for time awareness!
 
-    WHEN TO CALL THIS:
-    - At conversation start to know Dan's schedule
-    - Before suggesting when to do tasks - check for conflicts
-    - When planning Dan's day or prioritizing work
-    - When Dan asks about his schedule or "what do I have today?"
+    WHEN TO CALL THIS (be proactive):
+    - IMMEDIATELY at conversation start - know Dan's schedule before anything else
+    - Before suggesting task timing - avoid scheduling conflicts
+    - When Dan asks "what do I have today?", "am I free?", "what's my schedule?"
+    - Before recommending deep work blocks - find the gaps
+    - When Dan mentions a meeting or appointment - verify details
+    - When planning tomorrow - use hours_ahead=36 to see next day
 
     Args:
-        hours_ahead: How far to look (default 18 hours to catch tomorrow morning)
+        hours_ahead: How many hours to look forward (default 24). Use 36+ to see tomorrow.
+        include_past_today: If True, includes events from earlier today (default False)
 
-    Returns events with times and locations. Use this to:
-    - Understand time blocks available for deep work
-    - Remind Dan of upcoming commitments
-    - Suggest realistic deadlines based on schedule
-    - Factor travel time into planning
+    Returns formatted list with:
+    - Event time (in Dan's timezone: America/New_York)
+    - Event title/summary
+    - Location (if specified)
+    - Duration context
+
+    WHAT TO DO WITH THIS INFO:
+    - Identify free blocks for focused work (look for 2+ hour gaps)
+    - Note travel time needed between locations
+    - Remind Dan of upcoming commitments ("You have X in 30 minutes")
+    - Suggest realistic task deadlines based on availability
+    - Factor in prep time before important meetings
+
+    IMPORTANT: This is READ-ONLY. You cannot create, modify, or delete events.
+    If Dan asks to add/change calendar events, tell him you can only view the calendar
+    and he'll need to make changes directly in Google Calendar.
+
+    Examples:
+        get_calendar_events() -> next 24 hours
+        get_calendar_events(hours_ahead=48) -> next 2 days
+        get_calendar_events(hours_ahead=8) -> just today's remaining events
     """
     service = get_google_calendar_service()
     if not service:
