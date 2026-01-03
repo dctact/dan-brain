@@ -854,63 +854,40 @@ def detect_patterns(min_transcripts: int = 5) -> str:
     combined = "\n\n---\n\n".join(transcript_texts)
 
     try:
-        prompt = f"""You are analyzing conversations between Dan and his AI assistant to extract ACTIONABLE PSYCHOLOGICAL PATTERNS.
-
-Your goal: Find what ACTUALLY WORKS to get Dan from talking to DOING.
+        prompt = f"""Analyze these conversations to find what works with Dan. Be CONSERVATIVE.
 
 TRANSCRIPTS:
 {combined}
 
-EXISTING KNOWN PATTERNS (don't repeat these):
-{chr(10).join(existing_patterns[:20]) if existing_patterns else "None yet"}
+EXISTING PATTERNS (check for overlap — update these rather than duplicate):
+{chr(10).join(existing_patterns[:30]) if existing_patterns else "None yet"}
 
-Analyze for these specific pattern types:
-
-1. MOTIVATION TRIGGERS — What gets Dan energized and taking action?
-   - Topics/projects that spark immediate engagement vs ones he deflects
-   - Framing that works ("let's ship this" vs "we should plan this")
-   - External accountability cues that activate him
-
-2. RESISTANCE SIGNALS — What makes Dan shut down or avoid?
-   - How he deflects (changes subject, asks unrelated questions, gets meta)
-   - Topics or task types he consistently postpones
-   - Warning signs he's about to abandon something
-
-3. EFFECTIVE COMMUNICATION — What conversation approaches work?
-   - Direct vs gentle — which gets better response?
-   - Questions vs statements — what prompts action?
-   - When does humor help vs when does it derail?
-   - Does he respond better to challenge or support?
-
-4. ACTION CONVERSION — What turns conversation into completed tasks?
-   - What happens right before he actually does something?
-   - Breaking points where momentum dies
-   - Follow-up timing that works vs annoys
-
-5. ENERGY & STATE — When is he most/least productive?
-   - Time patterns (morning vs night, weekday vs weekend)
-   - Mood indicators that predict productive sessions
-   - Signs he needs to stop vs push through
+Find 1-3 HIGH-SIGNAL patterns only. Categories: motivation, resistance, communication, action, energy.
 
 Return as JSON:
 {{
-    "patterns": [
+    "new_patterns": [
         {{
             "type": "motivation|resistance|communication|action|energy",
-            "observation": "specific, actionable pattern observed",
-            "evidence_count": number of conversations showing this,
-            "agent_instruction": "how agent should USE this pattern",
-            "memory_format": "Dan [relation] [specific behavior/trigger]"
+            "observation": "specific pattern",
+            "evidence_count": number of convos showing this,
+            "agent_instruction": "what agent should DO"
         }}
     ],
-    "insufficient_data": ["patterns noticed once but need more evidence"]
+    "updates_to_existing": [
+        {{
+            "existing_pattern": "quote the existing pattern to update",
+            "update": "stronger/refined version based on new evidence"
+        }}
+    ],
+    "skip": ["patterns noticed but not enough evidence yet"]
 }}
 
 RULES:
-- Only include patterns with evidence_count >= 2
-- Be SPECIFIC — "responds well to direct challenges" not "likes directness"
-- The agent_instruction must be actionable — what should the agent DO differently?
-- Focus on patterns that convert to ACTION, not just preferences"""
+- MAX 3 new patterns — only genuinely new insights
+- If similar to existing pattern, put in updates_to_existing instead
+- evidence_count must be >= 3 (not 2)
+- No vague stuff like "prefers directness" — be specific and actionable"""
 
         # Use Gemini for large context pattern analysis
         response = gemini_model.generate_content(prompt)
@@ -923,47 +900,44 @@ RULES:
             return "Could not parse pattern analysis results."
 
         analysis = json.loads(json_match.group())
-        patterns = analysis.get("patterns", [])
-        insufficient = analysis.get("insufficient_data", [])
+        new_patterns = analysis.get("new_patterns", [])
+        updates = analysis.get("updates_to_existing", [])
+        skipped = analysis.get("skip", [])
 
-        # Save confirmed patterns to memory (with agent instructions)
+        # Save new patterns (max 3, evidence >= 3)
         saved_count = 0
-        for pattern in patterns:
-            if pattern.get("evidence_count", 0) >= 2:
+        for pattern in new_patterns[:3]:
+            if pattern.get("evidence_count", 0) >= 3:
                 observation = pattern.get("observation", "")
                 instruction = pattern.get("agent_instruction", "")
                 pattern_type = pattern.get("type", "other")
                 
-                if observation and observation not in existing_patterns:
-                    # Save as actionable pattern with instruction
-                    # Format: "Dan [pattern type] [observation] → [instruction]"
+                if observation:
                     relation = f"pattern ({pattern_type})"
-                    obj = observation
-                    if instruction:
-                        obj = f"{observation} → AGENT: {instruction}"
+                    obj = f"{observation} → AGENT: {instruction}" if instruction else observation
                     
                     result = add_memory("Dan", relation, obj, "preferences")
                     if "Stored" in result:
                         saved_count += 1
 
         # Format output
-        output = [f"Pattern Analysis ({len(archive)} transcripts analyzed):"]
+        output = [f"Pattern Analysis ({len(archive)} conversations):"]
 
-        if patterns:
-            output.append(f"\nACTIONABLE PATTERNS ({len(patterns)} found, {saved_count} new saved):")
-            for p in patterns:
-                ptype = p.get('type', '?')
-                output.append(f"\n  [{ptype.upper()}] {p.get('observation', '?')} (seen {p.get('evidence_count', '?')}x)")
-                if p.get('agent_instruction'):
-                    output.append(f"    → Agent should: {p['agent_instruction']}")
+        if new_patterns:
+            output.append(f"\nNEW PATTERNS ({len(new_patterns)} found, {saved_count} saved):")
+            for p in new_patterns[:3]:
+                output.append(f"  • [{p.get('type', '?')}] {p.get('observation', '?')}")
 
-        if insufficient:
-            output.append(f"\nNEED MORE EVIDENCE ({len(insufficient)} tentative):")
-            for i in insufficient[:5]:
-                output.append(f"  ? {i}")
+        if updates:
+            output.append(f"\nUPDATES TO EXISTING ({len(updates)}):")
+            for u in updates:
+                output.append(f"  ↻ {u.get('update', '?')}")
 
-        if not patterns and not insufficient:
-            output.append("\nNo clear patterns detected yet. Keep having conversations!")
+        if skipped:
+            output.append(f"\nNEED MORE DATA: {len(skipped)} patterns pending")
+
+        if not new_patterns and not updates:
+            output.append("\nNo new patterns. Things are working well.")
 
         return "\n".join(output)
 
