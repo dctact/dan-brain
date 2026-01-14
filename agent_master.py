@@ -141,7 +141,7 @@ MEMORY_CATEGORIES = [
 def _format_memory_age(created_at: str) -> str:
     """Format how long ago a memory was created."""
     if not created_at:
-        return ""
+        return "(old - no date)"
 
     try:
         tz = pytz.timezone("America/New_York")
