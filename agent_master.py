@@ -99,6 +99,19 @@ TRANSCRIPT_ARCHIVE_FILE = f"{DATA_DIR}/transcript_archive.json"
 # Last conversation for short-term memory
 LAST_CONVERSATION_FILE = f"{DATA_DIR}/last_conversation.json"
 
+# Last brainstorm session (separate from task-based conversations)
+LAST_BRAINSTORM_FILE = f"{DATA_DIR}/last_brainstorm.json"
+
+# --- AGENT TYPE CONFIGURATION ---
+# Brainstorm agents: focus on ideas, exploration, reflection (no task creation)
+# Task agents: focus on action items, commitments, accountability
+BRAINSTORM_AGENTS = ["Nova"]  # Add new brainstorm agent names here
+TASK_AGENTS = ["Zara", "Vic"]  # Existing task-focused agents
+
+def is_brainstorm_agent(agent_name: str) -> bool:
+    """Check if an agent is configured for brainstorm mode."""
+    return agent_name in BRAINSTORM_AGENTS
+
 # --- TOOL 1: TIME (The Grounding) ---
 @mcp.tool()
 def get_current_time() -> str:
@@ -608,29 +621,86 @@ def complete_google_calendar_setup(auth_code: str) -> str:
 
 # --- TOOL 5: TRANSCRIPT PROCESSING ---
 
-@mcp.tool()
-def process_transcript(transcript: str, agent_name: str = "Agent") -> str:
+def _process_brainstorm_transcript(transcript: str, agent_name: str) -> dict:
     """
-    Process a voice conversation transcript and extract action items.
-    Uses Claude to intelligently extract tasks, commitments, and priorities.
-
-    Args:
-        transcript: The full conversation transcript text
-        agent_name: Name of the agent in the conversation
-
-    Returns extracted action items and saves them for get_rest_of_day.
+    Process a brainstorm conversation - focuses on ideas, insights, and exploration
+    rather than action items. Returns structured data for iOS app.
     """
-    if not transcript or len(transcript.strip()) < 20:
-        return "Transcript too short to process."
-
-    try:
-        prompt = f"""Analyze this voice conversation transcript and extract actionable information.
+    prompt = f"""Analyze this brainstorming conversation between Dan and his AI thinking partner.
+This is NOT a task-focused conversation - focus on IDEAS, INSIGHTS, and EXPLORATION.
 
 TRANSCRIPT:
 {transcript}
 
 Extract and return as JSON:
 {{
+    "type": "brainstorm",
+    "key_insights": [
+        "Important realizations or 'aha moments' from the conversation"
+    ],
+    "ideas_explored": [
+        {{
+            "idea": "Description of an idea that was discussed",
+            "status": "explored" | "parked" | "needs_more",
+            "notes": "Any important context or considerations"
+        }}
+    ],
+    "questions_raised": [
+        "Open questions that emerged but weren't fully resolved"
+    ],
+    "new_facts_about_dan": [
+        "New information Dan revealed about himself, his preferences, goals, or situation"
+    ],
+    "connections_made": [
+        "Links between different ideas, past experiences, or concepts"
+    ],
+    "synthesis": "A 2-3 sentence summary capturing the essence of this brainstorm session"
+}}
+
+Guidelines:
+- Focus on the THINKING, not tasks to do
+- Capture the exploration journey, not just conclusions
+- Note ideas that were "parked" for later vs fully explored
+- Extract any new personal facts that could enrich Dan's knowledge graph
+- Be thoughtful about the synthesis - what was the real value of this conversation?
+- If the conversation was shallow or off-topic, be honest about that in synthesis"""
+
+    response = gemini_model.generate_content(prompt)
+    result_text = response.text
+
+    # Extract JSON from response
+    import re
+    json_match = re.search(r'\{[\s\S]*\}', result_text)
+    if json_match:
+        extracted = json.loads(json_match.group())
+        extracted["type"] = "brainstorm"  # Ensure type is set
+    else:
+        extracted = {
+            "type": "brainstorm",
+            "key_insights": [],
+            "ideas_explored": [],
+            "questions_raised": [],
+            "new_facts_about_dan": [],
+            "connections_made": [],
+            "synthesis": "Could not process this conversation."
+        }
+
+    return extracted
+
+
+def _process_task_transcript(transcript: str, agent_name: str) -> dict:
+    """
+    Process a task-focused conversation - extracts action items, commitments, etc.
+    Returns structured data for iOS app.
+    """
+    prompt = f"""Analyze this voice conversation transcript and extract actionable information.
+
+TRANSCRIPT:
+{transcript}
+
+Extract and return as JSON:
+{{
+    "type": "task",
     "action_items": [
         {{
             "task": "description of what needs to be done",
@@ -647,19 +717,51 @@ Extract and return as JSON:
 
 Only include items that are clearly actionable. Be concise. If nothing actionable, return empty arrays."""
 
-        # Use Gemini for large context processing
-        response = gemini_model.generate_content(prompt)
-        result_text = response.text
+    response = gemini_model.generate_content(prompt)
+    result_text = response.text
 
-        # Try to extract JSON from response
-        import re
-        json_match = re.search(r'\{[\s\S]*\}', result_text)
-        if json_match:
-            extracted = json.loads(json_match.group())
+    # Extract JSON from response
+    import re
+    json_match = re.search(r'\{[\s\S]*\}', result_text)
+    if json_match:
+        extracted = json.loads(json_match.group())
+        extracted["type"] = "task"  # Ensure type is set
+    else:
+        extracted = {
+            "type": "task",
+            "action_items": [],
+            "commitments": [],
+            "key_decisions": [],
+            "follow_ups": []
+        }
+
+    return extracted
+
+
+@mcp.tool()
+def process_transcript(transcript: str, agent_name: str = "Agent") -> str:
+    """
+    Process a voice conversation transcript. Automatically detects agent type
+    and uses appropriate processing (task-focused vs brainstorm-focused).
+
+    Args:
+        transcript: The full conversation transcript text
+        agent_name: Name of the agent in the conversation
+
+    Returns extracted insights/action items and saves them for retrieval.
+    """
+    if not transcript or len(transcript.strip()) < 20:
+        return "Transcript too short to process."
+
+    try:
+        # Branch based on agent type
+        is_brainstorm = is_brainstorm_agent(agent_name)
+        if is_brainstorm:
+            extracted = _process_brainstorm_transcript(transcript, agent_name)
         else:
-            extracted = {"action_items": [], "commitments": [], "key_decisions": [], "follow_ups": []}
+            extracted = _process_task_transcript(transcript, agent_name)
 
-        # Save to recent actions file
+        # Save to recent actions file (both types go here for unified tracking)
         tz = pytz.timezone("America/New_York")
         timestamp = datetime.now(tz).isoformat()
 
@@ -671,10 +773,11 @@ Only include items that are clearly actionable. Be concise. If nothing actionabl
                 except:
                     recent_actions = []
 
-        # Add new extraction
+        # Add new extraction with type indicator
         recent_actions.append({
             "timestamp": timestamp,
             "agent_name": agent_name,
+            "type": extracted.get("type", "task"),
             "extracted": extracted
         })
 
@@ -696,6 +799,7 @@ Only include items that are clearly actionable. Be concise. If nothing actionabl
         transcript_archive.append({
             "timestamp": timestamp,
             "agent_name": agent_name,
+            "type": extracted.get("type", "task"),
             "transcript": transcript[:5000]  # Limit size
         })
 
@@ -705,18 +809,47 @@ Only include items that are clearly actionable. Be concise. If nothing actionabl
         with open(TRANSCRIPT_ARCHIVE_FILE, 'w') as f:
             json.dump(transcript_archive, f, indent=2)
 
-        # Store a short summary for quick retrieval
-        with open(LAST_CONVERSATION_FILE, 'w') as f:
-            json.dump({
-                "timestamp": timestamp,
-                "agent_name": agent_name,
-                "summary": extracted.get("key_decisions", [])[:3],
-                "action_items": [item.get("task") for item in extracted.get("action_items", []) if item.get("owner") == "user"][:5],
-                "commitments": extracted.get("commitments", [])[:5],
-                "transcript_preview": transcript[:1500]
-            }, f, indent=2)
+        # Store summary based on conversation type
+        if is_brainstorm:
+            # Save brainstorm-specific summary
+            with open(LAST_BRAINSTORM_FILE, 'w') as f:
+                json.dump({
+                    "timestamp": timestamp,
+                    "agent_name": agent_name,
+                    "type": "brainstorm",
+                    "synthesis": extracted.get("synthesis", ""),
+                    "key_insights": extracted.get("key_insights", [])[:5],
+                    "ideas_explored": extracted.get("ideas_explored", [])[:5],
+                    "questions_raised": extracted.get("questions_raised", [])[:5],
+                    "new_facts_about_dan": extracted.get("new_facts_about_dan", [])[:5],
+                    "connections_made": extracted.get("connections_made", [])[:5],
+                    "transcript_preview": transcript[:1500]
+                }, f, indent=2)
+            # Also update last conversation for continuity
+            with open(LAST_CONVERSATION_FILE, 'w') as f:
+                json.dump({
+                    "timestamp": timestamp,
+                    "agent_name": agent_name,
+                    "type": "brainstorm",
+                    "summary": [extracted.get("synthesis", "Brainstorm session")],
+                    "action_items": [],  # Brainstorms don't have action items
+                    "commitments": [],
+                    "transcript_preview": transcript[:1500]
+                }, f, indent=2)
+        else:
+            # Task-focused summary (original behavior)
+            with open(LAST_CONVERSATION_FILE, 'w') as f:
+                json.dump({
+                    "timestamp": timestamp,
+                    "agent_name": agent_name,
+                    "type": "task",
+                    "summary": extracted.get("key_decisions", [])[:3],
+                    "action_items": [item.get("task") for item in extracted.get("action_items", []) if item.get("owner") == "user"][:5],
+                    "commitments": extracted.get("commitments", [])[:5],
+                    "transcript_preview": transcript[:1500]
+                }, f, indent=2)
 
-        # Auto-trigger pattern detection every 5 transcripts
+        # Auto-trigger pattern detection every 5 transcripts (both types)
         if len(transcript_archive) >= 5 and len(transcript_archive) % 5 == 0:
             try:
                 pattern_result = detect_patterns(min_transcripts=5)
@@ -724,26 +857,53 @@ Only include items that are clearly actionable. Be concise. If nothing actionabl
             except Exception as e:
                 print(f"[Auto Pattern Detection] Error: {e}")
 
-        # Format response
-        output = [f"Processed conversation with {agent_name}:"]
+        # Format response based on type
+        if is_brainstorm:
+            output = [f"Processed brainstorm with {agent_name}:"]
 
-        if extracted.get("action_items"):
-            output.append("\nACTION ITEMS:")
-            for item in extracted["action_items"]:
-                priority_marker = "!" * (3 if item.get("priority") == "high" else 2 if item.get("priority") == "medium" else 1)
-                output.append(f"  {priority_marker} {item['task']}")
-                if item.get("deadline"):
-                    output.append(f"      Due: {item['deadline']}")
+            if extracted.get("synthesis"):
+                output.append(f"\n📝 SYNTHESIS:\n  {extracted['synthesis']}")
 
-        if extracted.get("commitments"):
-            output.append("\nYOUR COMMITMENTS:")
-            for c in extracted["commitments"]:
-                output.append(f"  → {c}")
+            if extracted.get("key_insights"):
+                output.append("\n💡 KEY INSIGHTS:")
+                for insight in extracted["key_insights"]:
+                    output.append(f"  • {insight}")
 
-        if extracted.get("follow_ups"):
-            output.append("\nFOLLOW-UPS:")
-            for f in extracted["follow_ups"]:
-                output.append(f"  • {f}")
+            if extracted.get("ideas_explored"):
+                output.append("\n🎯 IDEAS EXPLORED:")
+                for idea in extracted["ideas_explored"]:
+                    status_icon = {"explored": "✓", "parked": "⏸", "needs_more": "…"}.get(idea.get("status", ""), "")
+                    output.append(f"  {status_icon} {idea.get('idea', '')}")
+
+            if extracted.get("questions_raised"):
+                output.append("\n❓ OPEN QUESTIONS:")
+                for q in extracted["questions_raised"]:
+                    output.append(f"  • {q}")
+
+            if extracted.get("new_facts_about_dan"):
+                output.append("\n🧠 NEW FACTS (potential memories):")
+                for fact in extracted["new_facts_about_dan"]:
+                    output.append(f"  • {fact}")
+        else:
+            output = [f"Processed conversation with {agent_name}:"]
+
+            if extracted.get("action_items"):
+                output.append("\nACTION ITEMS:")
+                for item in extracted["action_items"]:
+                    priority_marker = "!" * (3 if item.get("priority") == "high" else 2 if item.get("priority") == "medium" else 1)
+                    output.append(f"  {priority_marker} {item['task']}")
+                    if item.get("deadline"):
+                        output.append(f"      Due: {item['deadline']}")
+
+            if extracted.get("commitments"):
+                output.append("\nYOUR COMMITMENTS:")
+                for c in extracted["commitments"]:
+                    output.append(f"  → {c}")
+
+            if extracted.get("follow_ups"):
+                output.append("\nFOLLOW-UPS:")
+                for f_item in extracted["follow_ups"]:
+                    output.append(f"  • {f_item}")
 
         return "\n".join(output)
 
@@ -1081,8 +1241,36 @@ async def api_process_transcript(request: Request):
         transcript = body.get("transcript", "")
         agent_name = body.get("agent_name", "Agent")
 
+        # Process the transcript (saves to files)
         result = process_transcript(transcript, agent_name)
-        return JSONResponse({"success": True, "result": result})
+
+        # Return structured data based on agent type
+        is_brainstorm = is_brainstorm_agent(agent_name)
+
+        if is_brainstorm and os.path.exists(LAST_BRAINSTORM_FILE):
+            with open(LAST_BRAINSTORM_FILE, 'r') as f:
+                structured_data = json.load(f)
+            return JSONResponse({
+                "success": True,
+                "result": result,
+                "type": "brainstorm",
+                "data": structured_data
+            })
+        elif os.path.exists(LAST_CONVERSATION_FILE):
+            with open(LAST_CONVERSATION_FILE, 'r') as f:
+                structured_data = json.load(f)
+            return JSONResponse({
+                "success": True,
+                "result": result,
+                "type": structured_data.get("type", "task"),
+                "data": structured_data
+            })
+        else:
+            return JSONResponse({
+                "success": True,
+                "result": result,
+                "type": "brainstorm" if is_brainstorm else "task"
+            })
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -1216,6 +1404,31 @@ async def api_get_last_conversation(request: Request):
         return JSONResponse({"exists": True, "error": str(e)})
 
 
+async def api_get_last_brainstorm(request: Request):
+    """Get the last brainstorm session data for iOS app display."""
+    if not os.path.exists(LAST_BRAINSTORM_FILE):
+        return JSONResponse({
+            "success": False,
+            "exists": False,
+            "message": "No brainstorm session found"
+        })
+
+    try:
+        with open(LAST_BRAINSTORM_FILE, 'r') as f:
+            data = json.load(f)
+        return JSONResponse({
+            "success": True,
+            "exists": True,
+            "data": data
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "exists": True,
+            "error": str(e)
+        }, status_code=500)
+
+
 # --- SERVER ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
@@ -1230,6 +1443,7 @@ if __name__ == "__main__":
     mcp_app.routes.insert(0, Route("/api/rest-of-day/structured", api_get_rest_of_day_structured, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/health", api_health, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/last-conversation", api_get_last_conversation, methods=["GET"]))
+    mcp_app.routes.insert(0, Route("/api/last-brainstorm", api_get_last_brainstorm, methods=["GET"]))
 
     # Run with uvicorn
     uvicorn.run(mcp_app, host="0.0.0.0", port=8000)
