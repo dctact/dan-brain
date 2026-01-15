@@ -1,7 +1,7 @@
 mcp[cli]
 uvicorn
 starlette
-todoist-api-python
+# todoist-api-python removed
 pytz
 anthropic
 google-generativeai

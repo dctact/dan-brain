@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytz
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from todoist_api_python.api import TodoistAPI
+# todoist_api_python removed - using local task storage instead
 import anthropic
 import google.generativeai as genai
 from google.oauth2.credentials import Credentials
@@ -69,8 +69,7 @@ mcp = FastMCP(
     )
 )
 
-# Initialize Todoist API
-todoist = TodoistAPI(os.environ.get("TODOIST_API_TOKEN"))
+# Todoist API removed - using local task storage instead
 
 # Initialize Anthropic client (fallback)
 claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
@@ -105,6 +104,9 @@ LAST_BRAINSTORM_FILE = f"{DATA_DIR}/last_brainstorm.json"
 # Brainstorm Knowledge Base - persistent storage for insights, ideas, questions
 KNOWLEDGE_BASE_FILE = f"{DATA_DIR}/brainstorm_knowledge_base.json"
 
+# Persistent Tasks storage (replacing Todoist)
+TASKS_FILE = f"{DATA_DIR}/tasks.json"
+
 # Categories for organizing knowledge base items
 INSIGHT_CATEGORIES = [
     "self",           # Personal insights about Dan (values, patterns, identity)
@@ -121,7 +123,7 @@ INSIGHT_CATEGORIES = [
 # Brainstorm agents: focus on ideas, exploration, reflection (no task creation)
 # Task agents: focus on action items, commitments, accountability
 BRAINSTORM_AGENTS = ["Nova"]  # Add new brainstorm agent names here
-TASK_AGENTS = ["Zara", "Vic"]  # Existing task-focused agents
+TASK_AGENTS = ["Zara"]  # Task-focused agent (Vic removed)
 
 def is_brainstorm_agent(agent_name: str) -> bool:
     """Check if an agent is configured for brainstorm mode."""
@@ -401,6 +403,55 @@ def star_knowledge_item(item_id: str, item_type: str, starred: bool = True) -> d
             return {"success": True, "message": f"Updated starred status to {starred}"}
 
     return {"success": False, "message": f"Item not found: {item_id}"}
+
+
+# --- TASK STORAGE HELPERS ---
+
+def _load_tasks() -> list:
+    """Load tasks from persistent storage or return empty list."""
+    if os.path.exists(TASKS_FILE):
+        try:
+            with open(TASKS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return []
+
+
+def _save_tasks(tasks: list) -> None:
+    """Save tasks to persistent storage."""
+    os.makedirs(os.path.dirname(TASKS_FILE), exist_ok=True)
+    with open(TASKS_FILE, 'w') as f:
+        json.dump(tasks, f, indent=2)
+
+
+def _create_task(
+    title: str,
+    priority: int = 3,
+    due_date: str = None,
+    notes: str = None,
+    source_session: str = None
+) -> dict:
+    """Create a new task and save to storage. Returns the created task."""
+    tasks = _load_tasks()
+    tz = pytz.timezone("America/New_York")
+    timestamp = datetime.now(tz).isoformat()
+
+    new_task = {
+        "id": str(uuid.uuid4())[:8],
+        "title": title,
+        "priority": priority,  # 1=urgent, 2=high, 3=medium, 4=low
+        "due_date": due_date,
+        "notes": notes,
+        "is_completed": False,
+        "source_session": source_session,
+        "created_at": timestamp,
+        "completed_at": None
+    }
+
+    tasks.append(new_task)
+    _save_tasks(tasks)
+    return new_task
 
 
 # --- TOOL 1: TIME (The Grounding) ---
@@ -721,11 +772,12 @@ def cleanup_memories(action: str, indices: str, replacement: str = None) -> str:
     else:
         return "Invalid action. Use 'delete' or 'merge'"
 
-# --- TOOL 3: TODOIST (Action Layer) ---
+# --- TOOL 3: TASKS (Local Storage - replaces Todoist) ---
+
 @mcp.tool()
-def add_task(task_name: str, due_date: str = "today", priority: int = 1) -> str:
+def add_task(title: str, priority: int = 3, due_date: str = None, notes: str = None) -> str:
     """
-    Creates a new task in Dan's Todoist. Use this to capture action items!
+    Creates a new task. Use this to capture action items!
 
     WHEN TO CALL THIS:
     - Dan commits to doing something -> capture it immediately
@@ -734,28 +786,31 @@ def add_task(task_name: str, due_date: str = "today", priority: int = 1) -> str:
     - Dan asks you to remind him about something
 
     Args:
-        task_name: Clear, actionable task description (start with verb)
-        due_date: Natural language - 'today', 'tomorrow at 10am', 'next friday', 'in 3 days'
-        priority: 4 (Urgent/red), 3 (High/orange), 2 (Medium/yellow), 1 (Normal/none)
+        title: Clear, actionable task description (start with verb)
+        priority: 1 (Urgent/red), 2 (High/orange), 3 (Medium/default), 4 (Low/grey)
+        due_date: ISO date string like "2024-01-15" or natural language like "tomorrow"
+        notes: Optional additional context
 
     Examples:
-        add_task("Call dentist to schedule cleaning", "tomorrow", 2)
-        add_task("Review project proposal", "friday at 2pm", 3)
-        add_task("Buy birthday gift for Liz", "today", 4)
+        add_task("Call dentist to schedule cleaning", priority=2, due_date="tomorrow")
+        add_task("Review project proposal", priority=1, due_date="2024-01-20")
+        add_task("Buy birthday gift for Liz", priority=2)
 
     Pro tip: Be specific. "Work on project" is bad. "Draft intro section of proposal" is good.
     """
     try:
-        t = todoist.add_task(content=task_name, due_string=due_date, priority=priority)
-        due_info = t.due.string if t.due else due_date
-        return f"Task Added: '{t.content}' (Due: {due_info}, Priority: {priority})"
+        task = _create_task(title=title, priority=priority, due_date=due_date, notes=notes)
+        due_info = due_date if due_date else "No due date"
+        priority_labels = {1: "Urgent", 2: "High", 3: "Medium", 4: "Low"}
+        return f"Task Added: '{task['title']}' (Due: {due_info}, Priority: {priority_labels.get(priority, 'Medium')})"
     except Exception as e:
         return f"Error adding task: {str(e)}"
 
+
 @mcp.tool()
-def get_tasks(label: str = None) -> str:
+def get_tasks(include_completed: bool = False) -> str:
     """
-    Lists Dan's current tasks from Todoist. Use this for context and accountability!
+    Lists Dan's current tasks. Use this for context and accountability!
 
     WHEN TO CALL THIS:
     - At conversation start to understand what Dan should be working on
@@ -764,7 +819,7 @@ def get_tasks(label: str = None) -> str:
     - When Dan asks "what should I do?" or "what's on my list?"
 
     Args:
-        label: Optional filter (e.g. 'work', 'personal'). Usually omit for full picture.
+        include_completed: If True, includes completed tasks. Default False.
 
     Returns tasks with priority markers and due dates. Use this info to:
     - Hold Dan accountable to existing commitments
@@ -772,32 +827,114 @@ def get_tasks(label: str = None) -> str:
     - Help prioritize what to tackle next
     """
     try:
-        # get_tasks returns an iterator of task batches in v3.x
-        all_tasks = []
-        if label:
-            task_iterator = todoist.get_tasks(label=label)
-        else:
-            task_iterator = todoist.get_tasks()
+        all_tasks = _load_tasks()
 
-        # Collect tasks from iterator (limit to 50 to avoid overwhelming response)
-        for task_batch in task_iterator:
-            all_tasks.extend(task_batch)
-            if len(all_tasks) >= 50:
-                break
+        if not include_completed:
+            all_tasks = [t for t in all_tasks if not t.get("is_completed", False)]
 
         if not all_tasks:
             return "No tasks found."
 
-        # Format output
+        # Sort by priority (1=urgent first) then by due date
+        all_tasks.sort(key=lambda t: (t.get("priority", 3), t.get("due_date") or "9999"))
+
         output = []
+        priority_markers = {1: "🔴", 2: "🟠", 3: "🔵", 4: "⚪"}
         for t in all_tasks[:50]:
-            due_str = t.due.string if t.due else "No due date"
-            priority_marker = "!" * t.priority if t.priority > 1 else ""
-            output.append(f"- {priority_marker}{t.content} (Due: {due_str})")
+            due_str = t.get("due_date") or "No due date"
+            marker = priority_markers.get(t.get("priority", 3), "")
+            completed = "✓ " if t.get("is_completed") else ""
+            output.append(f"- {completed}{marker} [{t['id']}] {t['title']} (Due: {due_str})")
 
         return f"Found {len(all_tasks)} tasks:\n" + "\n".join(output)
     except Exception as e:
         return f"Error fetching tasks: {str(e)}"
+
+
+@mcp.tool()
+def complete_task(task_id: str) -> str:
+    """
+    Mark a task as completed.
+
+    Args:
+        task_id: The task ID (shown in brackets when listing tasks)
+
+    Use this when Dan says he's done with something or you confirm completion.
+    """
+    try:
+        tasks = _load_tasks()
+        tz = pytz.timezone("America/New_York")
+
+        for task in tasks:
+            if task["id"] == task_id:
+                task["is_completed"] = True
+                task["completed_at"] = datetime.now(tz).isoformat()
+                _save_tasks(tasks)
+                return f"Task completed: '{task['title']}'"
+
+        return f"Task not found: {task_id}"
+    except Exception as e:
+        return f"Error completing task: {str(e)}"
+
+
+@mcp.tool()
+def delete_task(task_id: str) -> str:
+    """
+    Permanently delete a task.
+
+    Args:
+        task_id: The task ID (shown in brackets when listing tasks)
+
+    Use when a task is no longer relevant (not just completed).
+    """
+    try:
+        tasks = _load_tasks()
+
+        for i, task in enumerate(tasks):
+            if task["id"] == task_id:
+                deleted_title = task["title"]
+                del tasks[i]
+                _save_tasks(tasks)
+                return f"Task deleted: '{deleted_title}'"
+
+        return f"Task not found: {task_id}"
+    except Exception as e:
+        return f"Error deleting task: {str(e)}"
+
+
+@mcp.tool()
+def update_task(task_id: str, title: str = None, priority: int = None, due_date: str = None, notes: str = None) -> str:
+    """
+    Update an existing task.
+
+    Args:
+        task_id: The task ID (shown in brackets when listing tasks)
+        title: New title (optional)
+        priority: New priority 1-4 (optional)
+        due_date: New due date (optional)
+        notes: New notes (optional)
+
+    Only provided fields will be updated.
+    """
+    try:
+        tasks = _load_tasks()
+
+        for task in tasks:
+            if task["id"] == task_id:
+                if title is not None:
+                    task["title"] = title
+                if priority is not None:
+                    task["priority"] = priority
+                if due_date is not None:
+                    task["due_date"] = due_date
+                if notes is not None:
+                    task["notes"] = notes
+                _save_tasks(tasks)
+                return f"Task updated: '{task['title']}'"
+
+        return f"Task not found: {task_id}"
+    except Exception as e:
+        return f"Error updating task: {str(e)}"
 
 # --- TOOL 4: GOOGLE CALENDAR ---
 
@@ -1102,7 +1239,7 @@ Guidelines:
 def _process_task_transcript(transcript: str, agent_name: str) -> dict:
     """
     Process a task-focused conversation - extracts action items, commitments, etc.
-    Returns structured data for iOS app.
+    Returns structured data for iOS app. Auto-saves tasks to persistent storage.
     """
     prompt = f"""Analyze this voice conversation transcript and extract actionable information.
 
@@ -1145,6 +1282,42 @@ Only include items that are clearly actionable. Be concise. If nothing actionabl
             "key_decisions": [],
             "follow_ups": []
         }
+
+    # --- AUTO-SAVE TASKS TO PERSISTENT STORAGE ---
+    session_id = str(uuid.uuid4())[:8]
+    tasks_added = 0
+    priority_map = {"high": 1, "medium": 3, "low": 4}
+
+    for item in extracted.get("action_items", []):
+        # Only save tasks owned by the user
+        if item.get("owner") == "user":
+            task_text = item.get("task", "").strip()
+            if task_text and len(task_text) > 5:
+                priority_str = item.get("priority", "medium").lower()
+                priority = priority_map.get(priority_str, 3)
+
+                _create_task(
+                    title=task_text,
+                    priority=priority,
+                    due_date=item.get("deadline"),
+                    notes=item.get("source"),
+                    source_session=session_id
+                )
+                tasks_added += 1
+
+    # Also save commitments as tasks
+    for commitment in extracted.get("commitments", []):
+        if commitment and len(commitment.strip()) > 5:
+            _create_task(
+                title=commitment.strip(),
+                priority=2,  # Commitments are high priority
+                source_session=session_id
+            )
+            tasks_added += 1
+
+    print(f"[Tasks] Session {session_id}: {tasks_added} tasks auto-saved")
+    extracted["_tasks_session_id"] = session_id
+    extracted["_tasks_added"] = tasks_added
 
     return extracted
 
@@ -1520,7 +1693,7 @@ RULES:
 def get_rest_of_day() -> str:
     """
     THE BIG PICTURE: Get everything Dan needs to do, all in one place.
-    Combines: Calendar events + Todoist tasks + Recent conversation action items
+    Combines: Calendar events + Tasks + Recent conversation action items
 
     WHEN TO CALL THIS:
     - At the START of conversations for full context
@@ -1530,7 +1703,7 @@ def get_rest_of_day() -> str:
 
     This is your PRIMARY tool for understanding Dan's obligations. It shows:
     - 📅 SCHEDULED: Calendar events for the next 18 hours
-    - ✅ TASKS: Todoist items due today or overdue
+    - ✅ TASKS: Active tasks sorted by priority
     - 💬 FROM CONVERSATIONS: Action items extracted from recent voice chats
 
     Use this to give Dan a clear, prioritized view of what needs attention.
@@ -1572,36 +1745,28 @@ def get_rest_of_day() -> str:
     else:
         output.append("  (Calendar not connected)")
 
-    # --- TODOIST TASKS ---
-    output.append("\n✅ TASKS (Todoist):")
+    # --- TASKS ---
+    output.append("\n✅ TASKS:")
     try:
-        all_tasks = []
-        # Get all active tasks
-        task_iterator = todoist.get_tasks()
-        for task_batch in task_iterator:
-            all_tasks.extend(task_batch)
-            if len(all_tasks) >= 50:
-                break
+        all_tasks = _load_tasks()
 
-        # Filter for today/overdue
+        # Filter for incomplete tasks, optionally due today or overdue
         today_str = now.strftime("%Y-%m-%d")
-        today_tasks = []
-        for t in all_tasks:
-            if t.due and t.due.date:
-                due_date = str(t.due.date)[:10]  # Handle both date and datetime
-                if due_date <= today_str:
-                    today_tasks.append(t)
+        active_tasks = [t for t in all_tasks if not t.get("is_completed", False)]
 
-        if today_tasks:
-            # Sort by priority (4 = urgent, 1 = normal)
-            today_tasks.sort(key=lambda t: -t.priority)
-            for task in today_tasks[:15]:
-                priority_marker = "‼️" if task.priority >= 3 else "❗" if task.priority == 2 else "  "
-                output.append(f"  {priority_marker} {task.content}")
+        # Sort by priority (1=urgent first)
+        active_tasks.sort(key=lambda t: t.get("priority", 3))
+
+        if active_tasks:
+            priority_markers = {1: "🔴", 2: "🟠", 3: "🔵", 4: "⚪"}
+            for task in active_tasks[:15]:
+                marker = priority_markers.get(task.get("priority", 3), "")
+                due_info = f" (Due: {task['due_date']})" if task.get("due_date") else ""
+                output.append(f"  {marker} {task['title']}{due_info}")
         else:
-            output.append("  No tasks due today")
+            output.append("  No active tasks")
     except Exception as e:
-        output.append(f"  (Todoist error: {str(e)})")
+        output.append(f"  (Tasks error: {str(e)})")
 
     # --- RECENT CONVERSATION ACTIONS ---
     output.append("\n💬 FROM RECENT CONVERSATIONS:")
@@ -1737,30 +1902,21 @@ async def api_get_rest_of_day_structured(request: Request):
             except Exception as e:
                 response_data["calendar_error"] = str(e)
 
-        # Todoist tasks
+        # Local tasks (replaces Todoist)
         try:
-            all_tasks = []
-            task_iterator = todoist.get_tasks()
-            for task_batch in task_iterator:
-                all_tasks.extend(task_batch)
-                if len(all_tasks) >= 50:
-                    break
+            all_tasks = _load_tasks()
+            active_tasks = [t for t in all_tasks if not t.get("is_completed", False)]
 
-            # Filter for today/overdue
-            today_str = now.strftime("%Y-%m-%d")
-            today_tasks = []
-            for t in all_tasks:
-                if t.due and t.due.date:
-                    due_date = str(t.due.date)[:10]
-                    if due_date <= today_str:
-                        today_tasks.append(t)
+            # Sort by priority (1=urgent first)
+            active_tasks.sort(key=lambda t: t.get("priority", 3))
 
-            today_tasks.sort(key=lambda t: -t.priority)
-            for task in today_tasks[:15]:
+            for task in active_tasks[:15]:
                 response_data["todoist_tasks"].append({
-                    "content": task.content,
-                    "priority": task.priority,
-                    "due": task.due.string if task.due else None
+                    "content": task.get("title", ""),
+                    "priority": task.get("priority", 3),
+                    "due": task.get("due_date"),
+                    "id": task.get("id"),
+                    "notes": task.get("notes")
                 })
         except Exception as e:
             response_data["todoist_error"] = str(e)
@@ -1892,6 +2048,165 @@ async def api_star_knowledge_item(request: Request):
         }, status_code=500)
 
 
+# --- TASK REST API ENDPOINTS ---
+
+async def api_get_tasks(request: Request):
+    """GET /api/tasks - Returns all tasks for iOS."""
+    try:
+        include_completed = request.query_params.get("include_completed", "").lower() == "true"
+        tasks = _load_tasks()
+
+        if not include_completed:
+            tasks = [t for t in tasks if not t.get("is_completed", False)]
+
+        # Sort by priority then due date
+        tasks.sort(key=lambda t: (t.get("priority", 3), t.get("due_date") or "9999"))
+
+        return JSONResponse({
+            "success": True,
+            "data": tasks
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
+async def api_create_task(request: Request):
+    """POST /api/tasks - Create a new task."""
+    try:
+        body = await request.json()
+        title = body.get("title")
+
+        if not title:
+            return JSONResponse({
+                "success": False,
+                "error": "Missing title"
+            }, status_code=400)
+
+        task = _create_task(
+            title=title,
+            priority=body.get("priority", 3),
+            due_date=body.get("due_date"),
+            notes=body.get("notes"),
+            source_session=body.get("source_session")
+        )
+
+        return JSONResponse({
+            "success": True,
+            "data": task
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
+async def api_update_task(request: Request):
+    """PUT /api/tasks/{id} - Update an existing task."""
+    try:
+        task_id = request.path_params.get("task_id")
+        body = await request.json()
+
+        tasks = _load_tasks()
+        task_found = None
+
+        for task in tasks:
+            if task["id"] == task_id:
+                task_found = task
+                if "title" in body:
+                    task["title"] = body["title"]
+                if "priority" in body:
+                    task["priority"] = body["priority"]
+                if "due_date" in body:
+                    task["due_date"] = body["due_date"]
+                if "notes" in body:
+                    task["notes"] = body["notes"]
+                if "is_completed" in body:
+                    task["is_completed"] = body["is_completed"]
+                    if body["is_completed"] and not task.get("completed_at"):
+                        task["completed_at"] = datetime.now(pytz.timezone("America/New_York")).isoformat()
+                break
+
+        if not task_found:
+            return JSONResponse({
+                "success": False,
+                "error": f"Task not found: {task_id}"
+            }, status_code=404)
+
+        _save_tasks(tasks)
+
+        return JSONResponse({
+            "success": True,
+            "data": task_found
+        })
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
+async def api_delete_task(request: Request):
+    """DELETE /api/tasks/{id} - Delete a task."""
+    try:
+        task_id = request.path_params.get("task_id")
+        tasks = _load_tasks()
+
+        for i, task in enumerate(tasks):
+            if task["id"] == task_id:
+                deleted_task = tasks.pop(i)
+                _save_tasks(tasks)
+                return JSONResponse({
+                    "success": True,
+                    "message": f"Deleted: {deleted_task['title']}"
+                })
+
+        return JSONResponse({
+            "success": False,
+            "error": f"Task not found: {task_id}"
+        }, status_code=404)
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
+async def api_complete_task(request: Request):
+    """POST /api/tasks/{id}/complete - Toggle task completion."""
+    try:
+        task_id = request.path_params.get("task_id")
+        tasks = _load_tasks()
+        tz = pytz.timezone("America/New_York")
+
+        for task in tasks:
+            if task["id"] == task_id:
+                # Toggle completion
+                task["is_completed"] = not task.get("is_completed", False)
+                if task["is_completed"]:
+                    task["completed_at"] = datetime.now(tz).isoformat()
+                else:
+                    task["completed_at"] = None
+                _save_tasks(tasks)
+                return JSONResponse({
+                    "success": True,
+                    "data": task
+                })
+
+        return JSONResponse({
+            "success": False,
+            "error": f"Task not found: {task_id}"
+        }, status_code=404)
+    except Exception as e:
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        }, status_code=500)
+
+
 # --- SERVER ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
@@ -1909,6 +2224,13 @@ if __name__ == "__main__":
     mcp_app.routes.insert(0, Route("/api/last-brainstorm", api_get_last_brainstorm, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/knowledge-base", api_get_knowledge_base, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/api/knowledge-base/star", api_star_knowledge_item, methods=["POST"]))
+
+    # Task API routes
+    mcp_app.routes.insert(0, Route("/api/tasks", api_get_tasks, methods=["GET"]))
+    mcp_app.routes.insert(0, Route("/api/tasks", api_create_task, methods=["POST"]))
+    mcp_app.routes.insert(0, Route("/api/tasks/{task_id}", api_update_task, methods=["PUT"]))
+    mcp_app.routes.insert(0, Route("/api/tasks/{task_id}", api_delete_task, methods=["DELETE"]))
+    mcp_app.routes.insert(0, Route("/api/tasks/{task_id}/complete", api_complete_task, methods=["POST"]))
 
     # Run with uvicorn
     uvicorn.run(mcp_app, host="0.0.0.0", port=8000)
