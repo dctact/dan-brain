@@ -476,20 +476,26 @@ def get_current_time() -> str:
 @mcp.tool()
 def search_documentation(query: str, library: str = None) -> str:
     """
-    Search documentation for libraries, frameworks, and APIs using Context7.
-    Use this when Dan needs to know HOW to use something he's already chosen.
+    Search official documentation for libraries, frameworks, and APIs.
+    USE THIS for implementation details - it returns REAL docs, not summaries.
+
+    WHEN TO CALL THIS:
+    - Dan asks HOW to do something with a specific tool/library
+    - Dan needs code examples, API references, or setup instructions
+    - Dan is debugging or troubleshooting a specific library
+    - Dan mentions a library name and wants to know how it works
+
+    DO NOT USE when Dan is still CHOOSING or wants OPINIONS - use search_web instead.
 
     Args:
-        query: What you're trying to learn or do (e.g., "create agent with knowledge base")
-        library: Optional - specific library name (e.g., "elevenlabs", "nextjs", "react")
-
-    Returns:
-        Relevant documentation with code examples
+        query: What you're trying to learn (e.g., "create agent with knowledge base")
+        library: Specific library name (e.g., "elevenlabs", "nextjs", "react") - PROVIDE THIS when you know it!
 
     Examples:
         - "How do I create an agent?" + library="elevenlabs" -> ElevenLabs agent docs
         - "useEffect cleanup" + library="react" -> React hooks documentation
-        - "authentication setup" + library="nextauth" -> NextAuth docs
+        - "set up OAuth" + library="nextauth" -> NextAuth configuration docs
+        - Dan says "I want to use ElevenLabs agents" -> search_documentation("agents", "elevenlabs")
     """
     if not CONTEXT7_API_KEY:
         return "Error: CONTEXT7_API_KEY not configured"
@@ -554,25 +560,28 @@ Source: Context7 ({library_id})"""
 @mcp.tool()
 def search_web(query: str) -> str:
     """
-    Search the web for reviews, opinions, comparisons, and current information using Perplexity.
-    Returns a synthesized answer with citations - not just links.
+    Search the web for opinions, reviews, comparisons, and current information.
+    Returns SYNTHESIZED answers with citations - not just links. USE THIS LIBERALLY.
 
-    Use this when Dan needs to:
-    - Know if something is GOOD (reviews, opinions, user experiences)
-    - CHOOSE between options (comparisons, alternatives, recommendations)
-    - Get CURRENT information (news, recent releases, pricing)
-    - Research ANY topic (general knowledge, how things work)
+    WHEN TO CALL THIS (prefer this when uncertain):
+    - Dan asks if something is GOOD or worth using -> reviews, real user opinions
+    - Dan is CHOOSING between tools/approaches -> comparisons, recommendations
+    - Dan wants CURRENT info -> news, recent releases, pricing, updates
+    - Dan asks about ANYTHING that isn't specific library documentation
+    - Dan mentions a tool without knowing if he wants to use it yet
+
+    THIS IS YOUR DEFAULT for research. When in doubt between search_documentation
+    and search_web, USE THIS ONE - it's better to get opinions than dump API docs.
 
     Args:
-        query: What you want to know (be specific for better results)
-
-    Returns:
-        Synthesized answer with source citations
+        query: Be specific! (e.g., "Is Tavily good for AI search?" not just "Tavily")
 
     Examples:
-        - "Is Tavily any good for AI search?" -> Synthesized review with real opinions
-        - "Best chess opening against d4 for aggressive play" -> Analysis with sources
-        - "Should I use NextAuth or Clerk for authentication?" -> Comparison with recommendations
+        - "Is Tavily any good?" -> Real opinions from Reddit, HN, developers
+        - "Best chess opening against d4" -> Analysis with sources
+        - "NextAuth vs Clerk for authentication" -> Comparison with recommendation
+        - "What's new in React 19" -> Current information with citations
+        - Dan says "I'm thinking about using Supabase" -> search_web("Is Supabase good? Real user experiences")
     """
     if not PERPLEXITY_API_KEY:
         return "Error: PERPLEXITY_API_KEY not configured"
